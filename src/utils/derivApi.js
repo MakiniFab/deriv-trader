@@ -1,10 +1,11 @@
+// src/utils/derivApi.js
 export function fetchAccountDetails(token) {
   return new Promise((resolve, reject) => {
-    // Open WebSocket connection to Deriv
-    const ws = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=34jtvKMAMvumIpF2SDF0D');
+    // Standard, production-ready Deriv WebSocket Endpoint
+    const ws = new WebSocket('wss://ws.deriv.com/websockets/v3?app_id=34jtvKMAMvumIpF2SDF0D');
 
     ws.onopen = () => {
-      // 1. Authorize connection using token
+      // 1. Send authorization request with stored access token
       ws.send(JSON.stringify({ authorize: token }));
     };
 
@@ -37,7 +38,7 @@ export function fetchAccountDetails(token) {
 
     ws.onerror = (err) => {
       ws.close();
-      reject('WebSocket connection failed.');
+      reject('WebSocket connection failed to establish.');
     };
   });
 }
