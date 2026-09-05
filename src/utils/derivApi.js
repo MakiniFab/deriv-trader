@@ -1,56 +1,33 @@
-// src/utils/derivApi.js
-const ENDPOINTS = [
-  'wss://ws.deriv.com/websockets/v3?app_id=34jtvKMAMvumIpF2SDF0D',
-  'wss://ws.derivws.com/websockets/v3?app_id=34jtvKMAMvumIpF2SDF0D'
-];
+import React from 'react';
+import { useNavigate } from 'react-router-dom';
+import { auth } from '../utils/auth';
 
-export function fetchAccountDetails(token) {
-  return new Promise((resolve, reject) => {
-    let attempted = 0;
+export default function Dashboard() {
+  const navigate = useNavigate();
+  const token = auth.getToken();
 
-    function tryConnect(urlIndex) {
-      if (urlIndex >= ENDPOINTS.length) {
-        reject('All WebSocket endpoints failed to connect.');
-        return;
-      }
+  const handleLogout = () => {
+    auth.logout();
+    navigate('/', { replace: true });
+  };
 
-      const ws = new WebSocket(ENDPOINTS[urlIndex]);
+  return (
+    <div style={{ padding: '30px', maxWidth: '800px', margin: '0 auto' }}>
+      <h2>Trading Dashboard</h2>
+      <div style={styles.card}>
+        <h3>Connection Info</h3>
+        <p><strong>Status:</strong> <span style={{ color: 'green' }}>Connected to Deriv API</span></p>
+        <p><strong>Active Access Token:</strong> <code>{token ? `${token.substring(0, 16)}...` : 'None'}</code></p>
+      </div>
 
-      ws.onopen = () => {
-        ws.send(JSON.stringify({ authorize: token }));
-      };
-
-      ws.onmessage = (event) => {
-        const response = JSON.parse(event.data);
-
-        if (response.msg_type === 'authorize') {
-          if (response.error) {
-            ws.close();
-            reject(response.error.message);
-            return;
-          }
-
-          const authData = response.authorize;
-          const details = {
-            email: authData.email,
-            fullName: `${authData.first_name || ''} ${authData.last_name || ''}`.trim() || 'Trader',
-            loginid: authData.loginid,
-            balance: authData.balance,
-            currency: authData.currency,
-            accountList: authData.account_list || []
-          };
-
-          ws.close();
-          resolve(details);
-        }
-      };
-
-      ws.onerror = () => {
-        ws.close();
-        tryConnect(urlIndex + 1); // Failover to second endpoint
-      };
-    }
-
-    tryConnect(0);
-  });
+      <button onClick={handleLogout} style={styles.logoutBtn}>
+        Log Out
+      </button>
+    </div>
+  );
 }
+
+const styles = {
+  card: { padding: '20px', backgroundColor: '#f6f8fa', border: '1px solid #e1e4e8', borderRadius: '6px', margin: '20px 0' },
+  logoutBtn: { padding: '10px 20px', backgroundColor: '#24292e', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }
+};
