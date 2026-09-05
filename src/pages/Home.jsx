@@ -4,7 +4,7 @@ export const Home = () => {
   const APP_ID = import.meta.env.VITE_DERIV_APP_ID || 'YOUR_APP_ID';
   
   // Point explicitly to your React callback route
-  const REDIRECT_URL = encodeURIComponent('http://localhost:5173/callback');
+  const REDIRECT_URL = encodeURIComponent('https://deriv-trader-shp0.onrender.com/callback');
 
   const handleLogin = () => {
     window.location.href = `https://oauth.deriv.com/oauth2/authorize?app_id=${APP_ID}&l=EN&redirect_uri=${REDIRECT_URL}`;
