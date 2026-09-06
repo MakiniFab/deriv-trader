@@ -2,7 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { auth } from '../utils/auth';
-import { fetchUserAccounts, subscribeToBalance } from '../utils/derivApi';
+import { fetchUserAccounts, getAccountOtpWsUrl, subscribeToBalanceWithOtp } from '../utils/derivApi';
 
 export default function Account() {
   const navigate = useNavigate();
@@ -14,6 +14,11 @@ export default function Account() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // Helper for login ID extraction
+  const getAccountId = (acc) => acc?.loginid || acc?.id || acc?.account_id || '';
+  const getIsVirtual = (acc) => acc?.is_virtual ?? acc?.is_demo ?? getAccountId(acc).startsWith('VRTC');
+
+  // 1. Fetch User Accounts
   useEffect(() => {
     if (!token) {
       navigate('/', { replace: true });
@@ -28,7 +33,7 @@ export default function Account() {
           setSelectedAccount(accountList[0]);
         }
       } catch (err) {
-        setError(err.message || 'Unable to fetch account list.');
+        setError(err.message || 'Unable to fetch accounts.');
       } finally {
         setLoading(false);
       }
@@ -37,29 +42,37 @@ export default function Account() {
     loadAccounts();
   }, [token, navigate]);
 
+  // 2. Fetch OTP WebSocket URL & Subscribe to Balance
   useEffect(() => {
-    if (!token || !selectedAccount) return;
+    const accountId = getAccountId(selectedAccount);
+    if (!token || !accountId) return;
 
+    let cleanupFn = () => {};
     setError(null);
-    const unsubscribe = subscribeToBalance(
-      token,
-      (data) => {
-        setBalanceData(data);
-      },
-      (errMessage) => {
-        setError(errMessage);
-      }
-    );
+    setBalanceData(null);
 
-    return () => unsubscribe();
+    async function setupAuthenticatedStream() {
+      try {
+        // Request OTP WebSocket URL from REST API
+        const wsUrl = await getAccountOtpWsUrl(token, accountId);
+
+        // Connect to authenticated WebSocket URL
+        cleanupFn = subscribeToBalanceWithOtp(
+          wsUrl,
+          (data) => setBalanceData(data),
+          (errMsg) => setError(errMsg)
+        );
+      } catch (err) {
+        setError(err.message || 'Failed to establish OTP WebSocket connection.');
+      }
+    }
+
+    setupAuthenticatedStream();
+
+    return () => cleanupFn();
   }, [token, selectedAccount]);
 
-  if (loading) return <div style={styles.container}><p>Loading account details...</p></div>;
-
-  // Helpers for key mapping across Deriv payload variations
-  const getLoginId = (acc) => acc?.loginid || acc?.id || acc?.account_id || 'N/A';
-  const getIsVirtual = (acc) => acc?.is_virtual ?? acc?.is_demo ?? (getLoginId(acc).startsWith('VRTC'));
-  const getCurrency = (acc) => acc?.currency || 'USD';
+  if (loading) return <div style={styles.container}><p>Loading accounts...</p></div>;
 
   return (
     <div style={styles.container}>
@@ -72,7 +85,7 @@ export default function Account() {
 
       {error && (
         <div style={styles.errorCard}>
-          <p><strong>Notice:</strong> {error}</p>
+          <p><strong>Error:</strong> {error}</p>
         </div>
       )}
 
@@ -81,20 +94,19 @@ export default function Account() {
           <label htmlFor="account-dropdown"><strong>Select Account: </strong></label>
           <select
             id="account-dropdown"
-            value={getLoginId(selectedAccount)}
+            value={getAccountId(selectedAccount)}
             onChange={(e) => {
-              const selected = accounts.find((a) => getLoginId(a) === e.target.value);
+              const selected = accounts.find((a) => getAccountId(a) === e.target.value);
               setSelectedAccount(selected);
             }}
             style={styles.select}
           >
             {accounts.map((acc) => {
-              const id = getLoginId(acc);
-              const isVirtual = getIsVirtual(acc);
-              const currency = getCurrency(acc);
+              const id = getAccountId(acc);
+              const isDemo = getIsVirtual(acc);
               return (
                 <option key={id} value={id}>
-                  {id} — {isVirtual ? 'Demo' : 'Real'} ({currency})
+                  {id} — {isDemo ? 'Demo' : 'Real'} ({acc.currency || 'USD'})
                 </option>
               );
             })}
@@ -105,21 +117,21 @@ export default function Account() {
       {selectedAccount && (
         <div style={styles.card}>
           <div style={styles.cardHeader}>
-            <h3>{getIsVirtual(selectedAccount) ? 'Demo Trading Account' : 'Real Trading Account'}</h3>
+            <h3>{getIsVirtual(selectedAccount) ? 'Demo Account' : 'Real Account'}</h3>
             <span style={getIsVirtual(selectedAccount) ? styles.demoBadge : styles.realBadge}>
               {getIsVirtual(selectedAccount) ? 'DEMO' : 'REAL'}
             </span>
           </div>
 
-          <p><strong>Login ID:</strong> <code>{getLoginId(selectedAccount)}</code></p>
-          <p><strong>Account Type:</strong> {getIsVirtual(selectedAccount) ? 'Virtual/Demo' : 'Real Financial'}</p>
+          <p><strong>Login ID:</strong> <code>{getAccountId(selectedAccount)}</code></p>
+          <p><strong>Account Type:</strong> {selectedAccount.account_type || (getIsVirtual(selectedAccount) ? 'Virtual' : 'Real')}</p>
 
           <div style={styles.balanceBox}>
             <span style={styles.balanceLabel}>Live Account Balance:</span>
             <h1 style={styles.balanceText}>
               {balanceData 
-                ? `${balanceData.currency || getCurrency(selectedAccount)} ${Number(balanceData.balance).toLocaleString('en-US', { minimumFractionDigits: 2 })}` 
-                : 'Fetching balance...'}
+                ? `${balanceData.currency || selectedAccount.currency || 'USD'} ${Number(balanceData.balance).toLocaleString('en-US', { minimumFractionDigits: 2 })}` 
+                : 'Fetching live balance via OTP...'}
             </h1>
           </div>
         </div>
@@ -141,5 +153,5 @@ const styles = {
   balanceBox: { marginTop: '20px', paddingTop: '15px', borderTop: '1px solid #eaecef' },
   balanceLabel: { color: '#57606a', fontSize: '14px' },
   balanceText: { fontSize: '36px', color: '#1a7f37', margin: '8px 0 0 0' },
-  errorCard: { padding: '15px', backgroundColor: '#fff8c5', color: '#9a6700', borderRadius: '6px', marginBottom: '20px' }
+  errorCard: { padding: '15px', backgroundColor: '#ffebe9', color: '#cf222e', borderRadius: '6px', marginBottom: '20px' }
 };
