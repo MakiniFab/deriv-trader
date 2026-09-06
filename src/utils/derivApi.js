@@ -9,10 +9,7 @@ const ENDPOINTS = [
 
 /**
  * Connects to Deriv WebSocket API, authorizes with the user token,
- * and fetches basic active account details.
- * 
- * @param {string} token - OAuth access token retrieved from auth.getToken()
- * @returns {Promise<Object>} Account details object
+ * and fetches basic active account details once.
  */
 export function fetchAccountDetails(token) {
   return new Promise((resolve, reject) => {
@@ -32,7 +29,6 @@ export function fetchAccountDetails(token) {
         return;
       }
 
-      // 5-second connection timeout to cycle to the next endpoint if stalled
       connectionTimeout = setTimeout(() => {
         if (ws.readyState !== WebSocket.OPEN) {
           ws.close();
@@ -42,7 +38,6 @@ export function fetchAccountDetails(token) {
 
       ws.onopen = () => {
         clearTimeout(connectionTimeout);
-        // Authorize session using OAuth token
         ws.send(JSON.stringify({ authorize: token }));
       };
 
@@ -88,4 +83,68 @@ export function fetchAccountDetails(token) {
 
     tryConnect(0);
   });
+}
+
+/**
+ * Establishes a persistent WebSocket connection to stream live balance updates.
+ */
+export function subscribeToBalance(token, onBalanceUpdate, onError) {
+  let ws = null;
+  let urlIndex = 0;
+
+  function connect() {
+    if (urlIndex >= ENDPOINTS.length) {
+      if (onError) onError('All WebSocket endpoints failed to connect.');
+      return;
+    }
+
+    ws = new WebSocket(ENDPOINTS[urlIndex]);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ authorize: token }));
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const response = JSON.parse(event.data);
+
+        if (response.error) {
+          if (onError) onError(response.error.message);
+          return;
+        }
+
+        if (response.msg_type === 'authorize') {
+          ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
+        }
+
+        if (response.msg_type === 'balance') {
+          const balanceData = response.balance;
+          if (onBalanceUpdate) {
+            onBalanceUpdate({
+              balance: balanceData.balance,
+              currency: balanceData.currency,
+              loginid: balanceData.loginid,
+              subscriptionId: balanceData.id
+            });
+          }
+        }
+      } catch (err) {
+        if (onError) onError('Failed to parse socket message.');
+      }
+    };
+
+    ws.onerror = () => {
+      ws.close();
+      urlIndex++;
+      connect();
+    };
+  }
+
+  connect();
+
+  return () => {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.close();
+    }
+  };
 }
