@@ -8,7 +8,7 @@ const WS_ENDPOINTS = [
 ];
 
 /**
- * Client-side REST call to fetch all options trading accounts.
+ * Fetch options trading accounts via REST API
  */
 export async function fetchUserAccounts(token) {
   const response = await fetch('https://api.derivws.com/trading/v1/options/accounts', {
@@ -29,21 +29,42 @@ export async function fetchUserAccounts(token) {
 }
 
 /**
- * Client-side WebSocket balance subscription.
+ * Subscribe to balance updates via WebSocket with automatic HTTPS REST Polling fallback
  */
 export function subscribeToBalance(token, onBalanceUpdate, onError) {
   let ws = null;
+  let pollingInterval = null;
   let urlIndex = 0;
+  let isConnected = false;
 
-  function connect() {
+  // 1. Attempt WebSocket Connection
+  function connectWebSocket() {
     if (urlIndex >= WS_ENDPOINTS.length) {
-      if (onError) onError('All WebSocket connection endpoints failed.');
+      console.warn('WebSockets blocked by environment. Falling back to HTTPS REST polling...');
+      startHttpPolling();
       return;
     }
 
-    ws = new WebSocket(WS_ENDPOINTS[urlIndex]);
+    try {
+      ws = new WebSocket(WS_ENDPOINTS[urlIndex]);
+    } catch (e) {
+      urlIndex++;
+      connectWebSocket();
+      return;
+    }
+
+    // Set a connection timeout to avoid hanging if socket drops quietly
+    const timeout = setTimeout(() => {
+      if (!isConnected) {
+        if (ws) ws.close();
+        urlIndex++;
+        connectWebSocket();
+      }
+    }, 3000);
 
     ws.onopen = () => {
+      clearTimeout(timeout);
+      isConnected = true;
       ws.send(JSON.stringify({ authorize: token }));
     };
 
@@ -56,7 +77,6 @@ export function subscribeToBalance(token, onBalanceUpdate, onError) {
           return;
         }
 
-        // Once authorized, request subscribed balance
         if (response.msg_type === 'authorize') {
           ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
         }
@@ -67,8 +87,7 @@ export function subscribeToBalance(token, onBalanceUpdate, onError) {
             onBalanceUpdate({
               balance: balanceData.balance,
               currency: balanceData.currency,
-              loginid: balanceData.loginid,
-              subscriptionId: balanceData.id
+              loginid: balanceData.loginid
             });
           }
         }
@@ -78,17 +97,56 @@ export function subscribeToBalance(token, onBalanceUpdate, onError) {
     };
 
     ws.onerror = () => {
-      ws.close();
+      clearTimeout(timeout);
+      if (ws) ws.close();
       urlIndex++;
-      connect();
+      connectWebSocket();
     };
   }
 
-  connect();
+  // 2. HTTPS REST Fallback Polling (Used when WSS is completely blocked)
+  function startHttpPolling() {
+    async function fetchBalanceOverHttp() {
+      try {
+        const response = await fetch('https://api.derivws.com/account/v1/balance', {
+          method: 'GET',
+          headers: {
+            'Deriv-App-ID': APP_ID,
+            'Authorization': `Bearer ${token}`
+          }
+        });
 
+        const data = await response.json();
+
+        if (response.ok && data.data) {
+          if (onBalanceUpdate) {
+            onBalanceUpdate({
+              balance: data.data.balance,
+              currency: data.data.currency,
+              loginid: data.data.loginid
+            });
+          }
+        } else if (data.errors && data.errors.length > 0) {
+          if (onError) onError(data.errors[0].message);
+        }
+      } catch (err) {
+        if (onError) onError('Unable to retrieve balance over HTTPS network connection.');
+      }
+    }
+
+    fetchBalanceOverHttp();
+    pollingInterval = setInterval(fetchBalanceOverHttp, 4000); // Poll every 4 seconds
+  }
+
+  connectWebSocket();
+
+  // Cleanup handler
   return () => {
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.close();
+    }
+    if (pollingInterval) {
+      clearInterval(pollingInterval);
     }
   };
 }

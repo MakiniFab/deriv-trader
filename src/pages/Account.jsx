@@ -14,7 +14,6 @@ export default function Account() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
-  // 1. Fetch user accounts on page load
   useEffect(() => {
     if (!token) {
       navigate('/', { replace: true });
@@ -38,10 +37,10 @@ export default function Account() {
     loadAccounts();
   }, [token, navigate]);
 
-  // 2. Subscribe to balance updates for the active selection
   useEffect(() => {
     if (!token || !selectedAccount) return;
 
+    setError(null);
     const unsubscribe = subscribeToBalance(
       token,
       (data) => {
@@ -57,6 +56,11 @@ export default function Account() {
 
   if (loading) return <div style={styles.container}><p>Loading account details...</p></div>;
 
+  // Helpers for key mapping across Deriv payload variations
+  const getLoginId = (acc) => acc?.loginid || acc?.id || acc?.account_id || 'N/A';
+  const getIsVirtual = (acc) => acc?.is_virtual ?? acc?.is_demo ?? (getLoginId(acc).startsWith('VRTC'));
+  const getCurrency = (acc) => acc?.currency || 'USD';
+
   return (
     <div style={styles.container}>
       <div style={styles.header}>
@@ -68,49 +72,54 @@ export default function Account() {
 
       {error && (
         <div style={styles.errorCard}>
-          <p><strong>Error:</strong> {error}</p>
+          <p><strong>Notice:</strong> {error}</p>
         </div>
       )}
 
-      {/* Account Selector */}
       {accounts.length > 0 && (
         <div style={styles.selectorGroup}>
           <label htmlFor="account-dropdown"><strong>Select Account: </strong></label>
           <select
             id="account-dropdown"
-            value={selectedAccount?.loginid || ''}
+            value={getLoginId(selectedAccount)}
             onChange={(e) => {
-              const selected = accounts.find((a) => a.loginid === e.target.value);
+              const selected = accounts.find((a) => getLoginId(a) === e.target.value);
               setSelectedAccount(selected);
             }}
             style={styles.select}
           >
-            {accounts.map((acc) => (
-              <option key={acc.loginid} value={acc.loginid}>
-                {acc.loginid} — {acc.is_virtual ? 'Demo' : 'Real'} ({acc.currency})
-              </option>
-            ))}
+            {accounts.map((acc) => {
+              const id = getLoginId(acc);
+              const isVirtual = getIsVirtual(acc);
+              const currency = getCurrency(acc);
+              return (
+                <option key={id} value={id}>
+                  {id} — {isVirtual ? 'Demo' : 'Real'} ({currency})
+                </option>
+              );
+            })}
           </select>
         </div>
       )}
 
-      {/* Display Active Account Details */}
       {selectedAccount && (
         <div style={styles.card}>
           <div style={styles.cardHeader}>
-            <h3>{selectedAccount.is_virtual ? 'Demo Trading Account' : 'Real Trading Account'}</h3>
-            <span style={selectedAccount.is_virtual ? styles.demoBadge : styles.realBadge}>
-              {selectedAccount.is_virtual ? 'DEMO' : 'REAL'}
+            <h3>{getIsVirtual(selectedAccount) ? 'Demo Trading Account' : 'Real Trading Account'}</h3>
+            <span style={getIsVirtual(selectedAccount) ? styles.demoBadge : styles.realBadge}>
+              {getIsVirtual(selectedAccount) ? 'DEMO' : 'REAL'}
             </span>
           </div>
 
-          <p><strong>Login ID:</strong> <code>{selectedAccount.loginid}</code></p>
-          <p><strong>Account Type:</strong> {selectedAccount.account_type || (selectedAccount.is_virtual ? 'Virtual' : 'Real')}</p>
+          <p><strong>Login ID:</strong> <code>{getLoginId(selectedAccount)}</code></p>
+          <p><strong>Account Type:</strong> {getIsVirtual(selectedAccount) ? 'Virtual/Demo' : 'Real Financial'}</p>
 
           <div style={styles.balanceBox}>
             <span style={styles.balanceLabel}>Live Account Balance:</span>
             <h1 style={styles.balanceText}>
-              {balanceData ? `${balanceData.currency} ${Number(balanceData.balance).toLocaleString('en-US', { minimumFractionDigits: 2 })}` : 'Fetching balance...'}
+              {balanceData 
+                ? `${balanceData.currency || getCurrency(selectedAccount)} ${Number(balanceData.balance).toLocaleString('en-US', { minimumFractionDigits: 2 })}` 
+                : 'Fetching balance...'}
             </h1>
           </div>
         </div>
@@ -132,5 +141,5 @@ const styles = {
   balanceBox: { marginTop: '20px', paddingTop: '15px', borderTop: '1px solid #eaecef' },
   balanceLabel: { color: '#57606a', fontSize: '14px' },
   balanceText: { fontSize: '36px', color: '#1a7f37', margin: '8px 0 0 0' },
-  errorCard: { padding: '15px', backgroundColor: '#ffebe9', color: '#cf222e', borderRadius: '6px', marginBottom: '20px' }
+  errorCard: { padding: '15px', backgroundColor: '#fff8c5', color: '#9a6700', borderRadius: '6px', marginBottom: '20px' }
 };
