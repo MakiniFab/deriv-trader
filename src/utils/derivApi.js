@@ -1,40 +1,63 @@
 // src/utils/derivApi.js
 const APP_ID = '34jtvKMAMvumIpF2SDF0D';
+const REST_BASE_URL = 'https://api.derivws.com';
 
-const ENDPOINTS = [
-  `wss://ws.deriv.com/websockets/v3?app_id=${APP_ID}&l=EN`,
-  `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}&l=EN`,
-  `wss://blue.derivws.com/websockets/v3?app_id=${APP_ID}&l=EN`
+const WS_ENDPOINTS = [
+  `wss://ws.deriv.com/websockets/v3?app_id=${APP_ID}`,
+  `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`,
+  `wss://blue.derivws.com/websockets/v3?app_id=${APP_ID}`
 ];
 
-export function fetchAccountDetails(token) {
+// 1. Fetch User Nickname via REST GET /account/v1/nickname
+export async function fetchUserNickname(token) {
+  const response = await fetch(`${REST_BASE_URL}/account/v1/nickname`, {
+    method: 'GET',
+    headers: {
+      'Deriv-App-ID': APP_ID,
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  const body = await response.json();
+
+  if (!response.ok || (body.errors && body.errors.length > 0)) {
+    const errorMsg = body.errors?.[0]?.message || 'Failed to fetch user nickname from REST API';
+    throw new Error(errorMsg);
+  }
+
+  return body.data; // Returns { external_reference_id, nickname }
+}
+
+// 2. Fetch Account Details & Statement via WebSocket
+export function fetchAccountDetailsAndStatement(token) {
   return new Promise((resolve, reject) => {
     function tryConnect(urlIndex) {
-      if (urlIndex >= ENDPOINTS.length) {
-        reject('All WebSocket endpoints failed to connect. Please check your network or disable ad-blockers.');
+      if (urlIndex >= WS_ENDPOINTS.length) {
+        reject('All WebSocket endpoints failed to connect. Check local network or ad-blockers.');
         return;
       }
 
       let ws;
-      let connectionTimeout;
-
       try {
-        ws = new WebSocket(ENDPOINTS[urlIndex]);
-      } catch (e) {
+        ws = new WebSocket(WS_ENDPOINTS[urlIndex]);
+      } catch (err) {
         tryConnect(urlIndex + 1);
         return;
       }
 
-      // Set a 5-second connection timeout to avoid hanging on a single failed endpoint
-      connectionTimeout = setTimeout(() => {
+      let accountData = null;
+
+      const connectionTimeout = setTimeout(() => {
         if (ws.readyState !== WebSocket.OPEN) {
           ws.close();
           tryConnect(urlIndex + 1);
         }
-      }, 5000);
+      }, 6000);
 
       ws.onopen = () => {
         clearTimeout(connectionTimeout);
+        // Step A: Send Authorization
         ws.send(JSON.stringify({ authorize: token }));
       };
 
@@ -42,32 +65,47 @@ export function fetchAccountDetails(token) {
         try {
           const response = JSON.parse(event.data);
 
+          if (response.error) {
+            ws.close();
+            reject(response.error.message);
+            return;
+          }
+
+          // Step B: Received authorize response -> Request Statement
           if (response.msg_type === 'authorize') {
-            if (response.error) {
-              ws.close();
-              reject(response.error.message);
-              return;
-            }
-
-            const authData = response.authorize;
-
-            const details = {
-              email: authData.email,
-              fullName: `${authData.first_name || ''} ${authData.last_name || ''}`.trim() || 'Trader',
-              loginid: authData.loginid,
-              balance: authData.balance,
-              currency: authData.currency,
-              isVirtual: Boolean(authData.is_virtual),
-              accountType: authData.is_virtual ? 'Demo' : 'Real',
-              accountList: authData.account_list || []
+            const auth = response.authorize;
+            accountData = {
+              email: auth.email,
+              fullName: `${auth.first_name || ''} ${auth.last_name || ''}`.trim() || 'Trader',
+              loginid: auth.loginid,
+              balance: auth.balance,
+              currency: auth.currency,
+              isVirtual: Boolean(auth.is_virtual),
+              accountType: auth.is_virtual ? 'Demo' : 'Real',
+              accountList: auth.account_list || []
             };
 
+            // Request statement transactions (as specified in documentation)
+            ws.send(
+              JSON.stringify({
+                statement: 1,
+                description: 1,
+                limit: 10
+              })
+            );
+          }
+
+          // Step C: Received statement response -> Finish
+          if (response.msg_type === 'statement') {
             ws.close();
-            resolve(details);
+            resolve({
+              account: accountData,
+              statement: response.statement || { count: 0, transactions: [] }
+            });
           }
         } catch (err) {
           ws.close();
-          reject('Failed to parse response from server.');
+          reject('Failed to process WebSocket payload.');
         }
       };
 
