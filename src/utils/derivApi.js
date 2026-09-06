@@ -1,71 +1,107 @@
 // src/utils/derivApi.js
 const APP_ID = '34jtvKMAMvumIpF2SDF0D';
-
 const WS_ENDPOINTS = [
   `wss://ws.deriv.com/websockets/v3?app_id=${APP_ID}`,
-  `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`,
-  `wss://blue.derivws.com/websockets/v3?app_id=${APP_ID}`
+  `wss://ws.derivws.com/websockets/v3?app_id=${APP_ID}`
 ];
 
 export function subscribeToBalance(token, onBalanceUpdate, onError) {
   let ws = null;
-  let urlIndex = 0;
+  let pollingInterval = null;
+  let wsConnected = false;
 
-  function connect() {
-    if (urlIndex >= WS_ENDPOINTS.length) {
-      onError('All WebSocket endpoints failed to connect.');
-      return;
+  // 1. Attempt WebSocket Connection
+  function startWebSocket() {
+    let endpointIndex = 0;
+
+    function connect() {
+      if (endpointIndex >= WS_ENDPOINTS.length) {
+        console.warn('WebSockets blocked by browser/network. Switching to HTTP fallback...');
+        startHttpPolling();
+        return;
+      }
+
+      ws = new WebSocket(WS_ENDPOINTS[endpointIndex]);
+
+      const connectionTimeout = setTimeout(() => {
+        if (!wsConnected) {
+          ws.close();
+          endpointIndex++;
+          connect();
+        }
+      }, 3500);
+
+      ws.onopen = () => {
+        clearTimeout(connectionTimeout);
+        wsConnected = true;
+        ws.send(JSON.stringify({ authorize: token }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const res = JSON.parse(event.data);
+
+          if (res.msg_type === 'authorize' && !res.error) {
+            ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
+          }
+
+          if (res.msg_type === 'balance' && res.balance) {
+            onBalanceUpdate({
+              balance: res.balance.balance,
+              currency: res.balance.currency,
+              loginid: res.balance.loginid,
+              source: 'WebSocket Live'
+            });
+          }
+        } catch (e) {
+          onError('Failed to parse response.');
+        }
+      };
+
+      ws.onerror = () => {
+        clearTimeout(connectionTimeout);
+        ws.close();
+        endpointIndex++;
+        connect();
+      };
     }
 
-    ws = new WebSocket(WS_ENDPOINTS[urlIndex]);
+    connect();
+  }
 
-    ws.onopen = () => {
-      // 1. Authorize connection
-      ws.send(JSON.stringify({ authorize: token }));
-    };
-
-    ws.onmessage = (event) => {
+  // 2. HTTP Polling Fallback if WS fails
+  function startHttpPolling() {
+    async function poll() {
       try {
-        const response = JSON.parse(event.data);
-
-        if (response.error) {
-          onError(response.error.message);
-          return;
-        }
-
-        // 2. Once authorized, subscribe to balance
-        if (response.msg_type === 'authorize') {
-          ws.send(JSON.stringify({ balance: 1, subscribe: 1 }));
-        }
-
-        // 3. Receive initial balance and continuous subscription updates
-        if (response.msg_type === 'balance') {
-          const balanceData = response.balance;
+        const res = await fetch('https://api.derivws.com/account/v1/balance', {
+          headers: {
+            'Deriv-App-ID': APP_ID,
+            'Authorization': `Bearer ${token}`
+          }
+        });
+        const data = await res.json();
+        if (data.data) {
           onBalanceUpdate({
-            balance: balanceData.balance,
-            currency: balanceData.currency,
-            loginid: balanceData.loginid,
-            subscriptionId: balanceData.id
+            balance: data.data.balance,
+            currency: data.data.currency,
+            loginid: data.data.loginid,
+            source: 'HTTP Rest'
           });
         }
       } catch (err) {
-        onError('Failed to parse socket message.');
+        onError('Network blocked both WebSocket and HTTP calls.');
       }
-    };
+    }
 
-    ws.onerror = () => {
-      ws.close();
-      urlIndex++;
-      connect();
-    };
+    poll();
+    pollingInterval = setInterval(poll, 5000); // Poll every 5 seconds
   }
 
-  connect();
+  startWebSocket();
 
-  // Return a cleanup function to close the connection when component unmounts
+  // Cleanup on unmount
   return () => {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.close();
-    }
+    if (ws) ws.close();
+    if (pollingInterval) clearInterval(pollingInterval);
   };
 }
