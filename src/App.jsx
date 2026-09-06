@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import Home from './pages/Home';
 import Callback from './pages/Callback';
 import Dashboard from './pages/Dashboard';
+import Account from './pages/Account';
 import ProtectedRoute from './components/ProtectedRoute';
 
 export default function App() {
@@ -16,6 +17,14 @@ export default function App() {
           element={
             <ProtectedRoute>
               <Dashboard />
+            </ProtectedRoute>
+          } 
+        />
+        <Route 
+          path="/account" 
+          element={
+            <ProtectedRoute>
+              <Account />
             </ProtectedRoute>
           } 
         />

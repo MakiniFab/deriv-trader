@@ -19,7 +19,9 @@ export default function Dashboard() {
         <p><strong>Status:</strong> <span style={{ color: 'green' }}>Connected to Deriv API</span></p>
         <p><strong>Active Access Token:</strong> <code>{token ? `${token.substring(0, 16)}...` : 'None'}</code></p>
       </div>
-
+      <button onClick={() => navigate('/account')} style={{ padding: '10px 20px', marginRight: '10px' }}>
+        View Account Details
+      </button>
       <button onClick={handleLogout} style={styles.logoutBtn}>
         Log Out
       </button>
